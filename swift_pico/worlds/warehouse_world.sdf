@@ -530,7 +530,7 @@
       </link>
     </model> 
     
-    <!-- <model name="box11">
+    <model name="box11">
       <pose>-7.5 -5 1.72 0 0 0</pose>
       <link name="box_link11">
         <inertial>
@@ -565,7 +565,7 @@
           </material>
         </visual>
       </link>
-    </model> -->
+    </model> 
 
     <model name="box12">
       <pose>-4 -7.5 1.72 0 0 0</pose>
