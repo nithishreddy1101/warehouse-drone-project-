@@ -1,16 +1,3 @@
-/*This cpp file runs a ROS 2-node of name pico_control which holds the position of Swift Pico Drone on the given dummy.
-This node publishes and subsribes the following topics:
-
-		PUBLICATIONS			SUBSCRIPTIONS
-		/drone_command			/whycon/poses
-		/pid_error			    /throttle_pid
-		            			/pitch_pid
-		            			/roll_pid
-					
-Rather than using different variables, use list. eg : self.setpoint = [1,2,3], where index corresponds to x,y,z ...rather than defining self.x_setpoint = 1, self.y_setpoint = 2
-CODE MODULARITY AND TECHNIQUES MENTIONED LIKE THIS WILL HELP YOU GAINING MORE MARKS WHILE CODE EVALUATION.*/
-
-// importing the required libraries
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -58,7 +45,7 @@ class Swift_Pico : public rclcpp::Node
             whycon marker at the position of the dummy given in the scene. Make the whycon marker associated with position_to_hold dummy renderable and make changes accordingly*/
             setpoint[0] = 2;
             setpoint[1] = 2;
-            setpoint[2] = 20;
+            setpoint[2] = 16;
 
             //Declaring a cmd of message type swift_msgs and initializing values
             cmd.rc_roll = 1500;
@@ -83,24 +70,46 @@ class Swift_Pico : public rclcpp::Node
             Kd[0] = 0;
             Kd[1] = 0;
             Kd[2] = 0;
+
+
+            //proportional
+            Kp[0] = 0.02*451;
+            Kp[1] = 0.02*451;
+            Kp[2] = 0.02*501;
+
+            //integral
+            Ki[0] = 0.0001*3;
+            Ki[1] = 0.0001*3;
+            Ki[2] = 0.0001*35;
+
+            //derivative
+            Kd[0] = 0.6*806;
+            Kd[1] = 0.6*806;
+            Kd[2] = 0.6*830;
             /*-----------------------Add other required variables for pid here ----------------------------------------------*/
+            max_values[0] =2000;
+            max_values[1] =2000;
+            max_values[2] =2000;
 
+            min_values[0] =1000;
+            min_values[1] =1000;
+            min_values[2] =1000;
 
+            error[0]=0.0;
+            error[1]=0.0;
+            error[2]=0.0;
 
+            iterm[0]=0.0;
+            iterm[1]=0.0;
+            iterm[2]=0.0;
 
+            diff[0]=0.0;
+            diff[1]=0.0;
+            diff[2]=0.0;
 
-
-
-
-
-            /* Hint : Add variables for storing previous errors in each axis, like prev_error = [0,0,0] where corresponds to [pitch, roll, throttle]. 
-            Add variables for limiting the values like max_values = [2000,2000,2000] corresponding to [roll, pitch, throttle]
-            										   min_values = [1000,1000,1000] corresponding to [roll, pitch, throttle]
-            Add variables for publishing error.
-            You can change the upper limit and lower limit accordingly. 
-            ---------------------------------------------------------------------------------------------------------*/
-
-            /*This is the sample time in which you need to run pid. Choose any time which you seem fit.*/
+            previous_error[0]=0.0;
+            previous_error[1]=0.0;
+            previous_error[2]=0.0;
         
             sample_time = 60ms; //in milli-seconds
 
@@ -114,6 +123,9 @@ class Swift_Pico : public rclcpp::Node
             //Subscribing to /whycon/poses, /throttle_pid, /pitch_pid, roll_pid
             whycon_sub = this->create_subscription<geometry_msgs::msg::PoseArray>("/whycon/poses", 1, std::bind(&Swift_Pico::whycon_callback, this, _1));
             throttle_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/throttle_pid", 1, std::bind(&Swift_Pico::altitude_set_pid, this, _1));
+            roll_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/roll_pid", 1, std::bind(&Swift_Pico::roll_set_pid, this, _1));
+            pitch_pid_sub = this->create_subscription<pid_msg::msg::PIDTune>("/pitch_pid", 1, std::bind(&Swift_Pico::pitch_set_pid, this, _1));
+
 
             //------------------------Add other ROS 2 Subscribers here-----------------------------------------------------
 
@@ -122,6 +134,10 @@ class Swift_Pico : public rclcpp::Node
             arm();
 
             //Creating a timer to run the pid function periodically, refer ROS 2 tutorials on how to create a publisher subscriber(C++)
+            timer_=this->create_wall_timer(
+                60ms,std::bind(&Swift_Pico::pid,this));
+
+            RCLCPP_INFO(this->get_logger(), "Swift Pico Started");
 
 
 
@@ -134,7 +150,17 @@ class Swift_Pico : public rclcpp::Node
         float drone_position[3];
         int setpoint[3];
         CMD cmd;
+        ERROR pid_error;
+        int max_values[3];
+        int min_values[3];
+        float error[3];
+        float iterm[3];
+        float diff[3];
+        float previous_error[3];
+
         std::chrono::milliseconds sample_time;
+	auto cmd = swift_msgs::msg::SwiftMsgs();
+        auto error_pub = pid_msg::msg::PIDError();
         float Kp[3];
         float Ki[3];
         float Kd[3];
@@ -145,6 +171,10 @@ class Swift_Pico : public rclcpp::Node
 
         rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr whycon_sub;
         rclcpp::Subscription<pid_msg::msg::PIDTune>::SharedPtr throttle_pid_sub;
+        rclcpp::Subscription<pid_msg::msg::PIDTune>::SharedPtr roll_pid_sub;
+        rclcpp::Subscription<pid_msg::msg::PIDTune>::SharedPtr pitch_pid_sub;
+
+        rclcpp::TimerBase::SharedPtr timer_;
 
         //define functions and callbacks here
 
@@ -169,74 +199,77 @@ class Swift_Pico : public rclcpp::Node
             cmd.rc_throttle = 1500;
             cmd.rc_aux4 = 2000;
             command_pub->publish(cmd);
-
         }
 
         void whycon_callback(const geometry_msgs::msg::PoseArray & msg)
         {
             drone_position[0] = msg.poses[0].position.x;
-            /*--------------------Set the remaining co-ordinates of the drone from msg----------------------------------------------
-
-
-
-	
-		    ------------------------------------------------------------------------------------------------------------------------*/
-
+            drone_position[1] = msg.poses[0].position.y;
+            drone_position[2] = msg.poses[0].position.z;
         }
-
-        //Callback function for /throttle_pid
-	    //This function gets executed each time when /drone_pid_tuner publishes /throttle_pid
 	
         void altitude_set_pid(const pid_msg::msg::PIDTune & alt)
         {
-            Kp[2] = alt.kp * 0.03;  // This is just for an example. You can change the ratio/fraction value accordingly
-		    Ki[2] = alt.ki * 0.008;
+            Kp[2] = alt.kp * 0.02;
+		    Ki[2] = alt.ki * 0.0001;
 		    Kd[2] = alt.kd * 0.6;
         }
 
+        void roll_set_pid(const pid_msg::msg::PIDTune & alt)
+        {
+            Kp[0] = alt.kp * 0.02; 
+		    Ki[0] = alt.ki * 0.0001;
+		    Kd[0] = alt.kd * 0.6;
+        }
 
-        //----------------------------Define callback function like altitide_set_pid to tune pitch, roll--------------
+        void pitch_set_pid(const pid_msg::msg::PIDTune & alt)
+        {
+            Kp[1] = alt.kp * 0.02; 
+		    Ki[1] = alt.ki * 0.0001;
+		    Kd[1] = alt.kd * 0.6;
+        }
 
-        //----------------------------------------------------------------------------------------------------------------------
 
 
         void pid()
         {
-            auto cmd = swift_msgs::msg::SwiftMsgs();
-            auto error_pub = pid_msg::msg::PIDError();
-            /*-----------------------------Write the PID algorithm here--------------------------------------------------------------
+            error[0]=drone_position[0]-setpoint[0];
+            error[1]=drone_position[1]-setpoint[1];
+            error[2]=drone_position[2]-setpoint[2];
 
-            # Steps:
-            # 	1. Compute error in each axis. eg: error[0] = self.drone_position[0] - self.setpoint[0] ,where error[0] corresponds to error in x...
-            #	2. Compute the error (for proportional), change in error (for derivative) and sum of errors (for integral) in each axis. Refer "Understanding PID.pdf" to understand PID equation.
-            #	3. Calculate the pid output required for each axis. For eg: calcuate self.out_roll, self.out_pitch, etc.
-            #	4. Reduce or add this computed output value on the avg value ie 1500. For eg: self.cmd.rcRoll = 1500 + self.out_roll. LOOK OUT FOR SIGN (+ or -). EXPERIMENT AND FIND THE CORRECT SIGN
-            #	5. Don't run the pid continously. Run the pid only at the a sample time. self.sampletime defined above is for this purpose. THIS IS VERY IMPORTANT.
-            #	6. Limit the output value and the final command value between the maximum(2000) and minimum(1000)range before publishing. For eg : if self.cmd.rcPitch > self.max_values[1]:
-            #																														self.cmd.rcPitch = self.max_values[1]
-            #	7. Update previous errors.eg: self.prev_error[1] = error[1] where index 1 corresponds to that of pitch (eg)
-            #	8. Add error_sum
+            iterm[0]=iterm[0]+error[0];
+            iterm[1]=iterm[1]+error[1];
+            iterm[2]=iterm[2]+error[2];
+
+            diff[0]=error[0]-previous_error[0];
+            diff[1]=error[1]-previous_error[1];
+            diff[2]=error[2]-previous_error[2];
 
 
+            float roll_out= Kp[0]*error[0]+Ki[0]*iterm[0]+Kd[0]*diff[0];
+
+            float pitch_out= Kp[1]*error[1]+Ki[1]*iterm[1]+Kd[1]*diff[1];
+
+            float throttle_out= Kp[2]*error[2]+Ki[2]*iterm[2]+Kd[2]*diff[2];
+
+            cmd.rc_throttle = int(1500+throttle_out);
+            cmd.rc_roll = int(1500-roll_out);
+            cmd.rc_pitch = int(1500 + pitch_out);
+
+            /*std::string logger_= "Roll: "+std::to_string(roll_out)+" Pitch: "+ std::to_string(pitch_out)+" throttle: "+std::to_string(throttle_out);
+
+            RCLCPP_INFO(this->get_logger(), "Publishing: '%s'", logger_.c_str());*/
 
 
+            previous_error[0]=error[0];
+            previous_error[1]=error[1];
+            previous_error[2]=error[2];
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-            #------------------------------------------------------------------------------------------------------------------------*/
             command_pub->publish(cmd);
-            //calculate throttle error, pitch error and roll error, then publish it accordingly
+
+            error_pub.roll_error=error[0];
+            error_pub.pitch_error=error[1];
+            error_pub.throttle_error=error[2]-3.0;
             pid_error_pub->publish(error_pub);
 
         }
