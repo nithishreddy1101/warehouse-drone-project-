@@ -43,17 +43,6 @@ class Swift_Pico(Node):
 		self.iterm=[0.0,0.0,0.0]
 		self.error=[0.0,0.0,0.0]
 		self.diff =[0.0,0.0,0.0]
-
-
-
-
-
-		# Hint : Add variables for storing previous errors in each axis, like self.prev_error = [0,0,0] where corresponds to [pitch, roll, throttle]		#		 Add variables for limiting the values like self.max_values = [2000,2000,2000] corresponding to [roll, pitch, throttle]
-		#													self.min_values = [1000,1000,1000] corresponding to [pitch, roll, throttle]
-		#																	You can change the upper limit and lower limit accordingly. 
-		#----------------------------------------------------------------------------------------------------------
-
-		# # This is the sample time in which you need to run pid. Choose any time which you seem fit.
 	
 		self.sample_time = 0.060 # in seconds
 
